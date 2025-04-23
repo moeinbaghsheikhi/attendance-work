@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>آپلود فایل CSV</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link rel="preconnect" href="//fdn.fontcdn.ir">
+    <link rel="preconnect" href="//v1.fontapi.ir">
+    <link href="https://v1.fontapi.ir/css/Vazir" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-light">
+    <div class="container mt-4">
+        <h2 class="text-center mb-4">سیستم حضور و غیاب</h2>
+        
+        <!-- فرم آپلود فایل -->
+        <div class="row justify-content-center" id="upload-content-bar">
+            <div class="col-md-6">
+                <div class="card shadow-lg rounded-4 mb-4">
+                    <div class="card-body">
+                        <form id="uploadForm" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="csv_file" class="form-label">انتخاب فایل CSV:</label>
+                                <input type="file" name="csv_file" id="csv_file" class="form-control" accept=".csv" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="year" class="form-label">سال:</label>
+                                <select name="year" id="year" class="form-select" required>
+                                    <option value="1403">1403</option>
+                                    <option value="1404" selected>1404</option>
+                                    <option value="1405">1405</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="month" class="form-label">ماه:</label>
+                                <select name="month" id="month" class="form-select" required>
+                                    <option value="1">فروردین</option>
+                                    <option value="2">اردیبهشت</option>
+                                    <option value="3">خرداد</option>
+                                    <option value="4">تیر</option>
+                                    <option value="5">مرداد</option>
+                                    <option value="6">شهریور</option>
+                                    <option value="7">مهر</option>
+                                    <option value="8">آبان</option>
+                                    <option value="9">آذر</option>
+                                    <option value="10">دی</option>
+                                    <option value="11">بهمن</option>
+                                    <option value="12">اسفند</option>
+                                </select>
+                            </div>
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary">آپلود</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- منوی انتخاب کارمند (ابتدا مخفی) -->
+        <div id="employeeSelectContainer" class="row justify-content-center" style="display: none;">
+            <div class="col-md-6" style="margin: 0 auto;">
+                <div class="card shadow-lg rounded-4">
+                    <div class="card-body">
+                        <h4 class="card-title text-center mb-4">انتخاب کارمند</h4>
+                        <div class="mb-3">
+                            <label for="employeeId" class="form-label">کارمند:</label>
+                            <select id="employeeId" class="form-select">
+                                <option value="" disabled selected>یک کارمند انتخاب کنید</option>
+                                <option value="8">عامری</option>
+                                <option value="10">خانفلی</option>
+                                <option value="12">کرمی</option>
+                                <option value="13">لرستانی</option>
+                                <option value="15">کوکبی</option>
+                                <option value="16">شیخی</option>
+                                <option value="17">خسروی</option>
+                                <option value="18">قنبری</option>
+                                <option value="19">آراسته</option>
+                                <option value="20">مسرور</option>
+                                <option value="21">احمدی</option>
+                                <option value="22">رمضانی</option>
+                                <option value="23">معروفی</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- محل نمایش جدول -->
+        <div id="result" class="container mt-4"></div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+            if (result.success) {
+                document.getElementById('employeeSelectContainer').style.display = 'block';
+                document.getElementById('upload-content-bar').style.display = 'none';
+                alert('فایل با موفقیت آپلود شد. حالا یک کارمند انتخاب کنید.');
+            } else {
+                alert('خطا در آپلود فایل: ' + result.message + '. لطفاً مطمئن شوید فایل CSV معتبر است و شامل داده‌های حضور و غیاب با فرمت صحیح (شناسه کارمند, زمان) باشد.');
+            }
+        });
+
+        document.getElementById('employeeId').addEventListener('change', async (e) => {
+            const employeeId = e.target.value;
+            if (!employeeId) return;
+
+            const response = await fetch(`/employee/${employeeId}`);
+            const html = await response.text();
+            document.getElementById('result').innerHTML = html;
+        });
+    </script>
+</body>
+</html>
