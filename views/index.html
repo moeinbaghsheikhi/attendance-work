@@ -58,15 +58,15 @@
             </div>
         </div>
 
-        <!-- منوی انتخاب کارمند (ابتدا مخفی) -->
+        <!-- منوی انتخاب کارمند و شیفت (ابتدا مخفی) -->
         <div id="employeeSelectContainer" class="row justify-content-center" style="display: none;">
             <div class="col-md-6" style="margin: 0 auto;">
                 <div class="card shadow-lg rounded-4">
                     <div class="card-body">
-                        <h4 class="card-title text-center mb-4">انتخاب کارمند</h4>
+                        <h4 class="card-title text-center mb-4">انتخاب کارمند و شیفت</h4>
                         <div class="mb-3">
                             <label for="employeeId" class="form-label">کارمند:</label>
-                            <select id="employeeId" class="form-select">
+                            <select id="employeeId" class="form-select" required>
                                 <option value="" disabled selected>یک کارمند انتخاب کنید</option>
                                 <option value="8">عامری</option>
                                 <option value="10">خانفلی</option>
@@ -81,6 +81,14 @@
                                 <option value="21">احمدی</option>
                                 <option value="22">رمضانی</option>
                                 <option value="23">معروفی</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="shift" class="form-label">شیفت:</label>
+                            <select id="shift" class="form-select" required>
+                                <option value="" disabled selected>یک شیفت انتخاب کنید</option>
+                                <option value="sat-wed">شنبه تا چهارشنبه</option>
+                                <option value="sat-thu">شنبه تا پنج‌شنبه</option>
                             </select>
                         </div>
                     </div>
@@ -104,7 +112,7 @@
             if (result.success) {
                 document.getElementById('employeeSelectContainer').style.display = 'block';
                 document.getElementById('upload-content-bar').style.display = 'none';
-                alert('فایل با موفقیت آپلود شد. حالا یک کارمند انتخاب کنید.');
+                alert('فایل با موفقیت آپلود شد. حالا یک کارمند و شیفت انتخاب کنید.');
             } else {
                 alert('خطا در آپلود فایل: ' + result.message + '. لطفاً مطمئن شوید فایل CSV معتبر است و شامل داده‌های حضور و غیاب با فرمت صحیح (شناسه کارمند, زمان) باشد.');
             }
@@ -112,9 +120,20 @@
 
         document.getElementById('employeeId').addEventListener('change', async (e) => {
             const employeeId = e.target.value;
-            if (!employeeId) return;
+            const shift = document.getElementById('shift').value;
+            if (!employeeId || !shift) return;
 
-            const response = await fetch(`/employee/${employeeId}`);
+            const response = await fetch(`/employee/${employeeId}/${shift}`);
+            const html = await response.text();
+            document.getElementById('result').innerHTML = html;
+        });
+
+        document.getElementById('shift').addEventListener('change', async (e) => {
+            const shift = e.target.value;
+            const employeeId = document.getElementById('employeeId').value;
+            if (!employeeId || !shift) return;
+
+            const response = await fetch(`/employee/${employeeId}/${shift}`);
             const html = await response.text();
             document.getElementById('result').innerHTML = html;
         });

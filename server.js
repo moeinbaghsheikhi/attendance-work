@@ -84,6 +84,8 @@ app.post('/upload', upload.single('csv_file'), (req, res) => {
       res.json({ success: true });
     })
     .on('error', (err) => {
+      console.log("error:")
+      console.log(err)
       res.json({ success: false, message: 'خطا در پردازش فایل: ' + err.message });
     });
 });
@@ -109,15 +111,14 @@ function getPersianDayOfWeek(dateString) {
   return days[persianDayIndex];
 }
 
-// مسیر برای نمایش جدول کارمند خاص
-app.get('/employee/:id', (req, res) => {
+// مسیر برای نمایش جدول کارمند خاص با شیفت
+app.get('/employee/:id/:shift', (req, res) => {
   const employeeId = req.params.id;
-  const shiftStart = '10:00:00'; // شروع شیفت (10 صبح)
-  const shiftEnd = '18:00:00';   // پایان شیفت (6 عصر)
+  const shift = req.params.shift; // sat-wed یا sat-thu
 
   let html = `
     <div class="container">
-      <h2>جدول حضور و غیاب کارمند ${employeeNames[employeeId] || employeeId}</h2>
+      <h2>جدول حضور و غیاب کارمند ${employeeNames[employeeId] || employeeId} (شیفت: ${shift === 'sat-wed' ? 'شنبه تا چهارشنبه' : 'شنبه تا پنج‌شنبه'})</h2>
       <table>
         <tr><th>ردیف</th><th>تاریخ</th><th>زمان</th><th>نوع رکورد</th></tr>
   `;
@@ -150,6 +151,23 @@ app.get('/employee/:id', (req, res) => {
         if (i % 2 === 1 && !isInvalid) {
           const entryTime = new Date(`${date} ${times[i - 1]}`);
           const exitTime = new Date(`${date} ${time}`);
+          const dayOfWeek = getPersianDayOfWeek(date);
+
+          // تعیین زمان شیفت بر اساس نوع شیفت و روز هفته
+          let shiftStart, shiftEnd;
+          if (shift === 'sat-wed') {
+            shiftStart = '10:00:00'; // شنبه تا چهارشنبه: 10:00 تا 19:00
+            shiftEnd = '19:00:00';
+          } else { // sat-thu
+            if (dayOfWeek === 'پنج‌شنبه') {
+              shiftStart = '10:00:00'; // پنج‌شنبه: 10:00 تا 14:00
+              shiftEnd = '14:00:00';
+            } else {
+              shiftStart = '10:00:00'; // شنبه تا چهارشنبه: 10:00 تا 18:00
+              shiftEnd = '18:00:00';
+            }
+          }
+
           const shiftStartTime = new Date(`${date} ${shiftStart}`);
           const shiftEndTime = new Date(`${date} ${shiftEnd}`);
 
@@ -188,9 +206,17 @@ app.get('/employee/:id', (req, res) => {
 
   // محاسبه روزهای غایب
   const daysInMonth = getDaysInMonth(globalYear, parseInt(globalMonth));
-  const absentDays = daysInMonth.filter(
-    (day) => !globalAttendanceData[employeeId] || !globalAttendanceData[employeeId][day]
-  );
+  const absentDays = daysInMonth.filter((day) => {
+    const dayOfWeek = getPersianDayOfWeek(day);
+    // فقط روزهایی که جزو شیفت هستند بررسی می‌شن
+    if (shift === 'sat-wed' && (dayOfWeek === 'پنج‌شنبه' || dayOfWeek === 'جمعه')) {
+      return false; // پنج‌شنبه و جمعه برای شیفت sat-wed غیبت نیست
+    }
+    if (shift === 'sat-thu' && dayOfWeek === 'جمعه') {
+      return false; // فقط جمعه برای شیفت sat-thu غیبت نیست
+    }
+    return !globalAttendanceData[employeeId] || !globalAttendanceData[employeeId][day];
+  });
 
   // جدول روزهای غایب
   html += `
@@ -202,8 +228,9 @@ app.get('/employee/:id', (req, res) => {
     absentDays.forEach((day, index) => {
       const dayOfWeek = getPersianDayOfWeek(day);
       const isNonWeekend = dayOfWeek !== 'پنج‌شنبه' && dayOfWeek !== 'جمعه';
-      const rowClass = isNonWeekend ? 'non-weekend-absence' : '';
-      html += `<tr class="${rowClass}"><td>${index + 1}</td><td>${day}</td><td>${dayOfWeek}</td></tr>`;
+      // const rowClass = isNonWeekend ? 'non-weekend-absence' : '';
+      if(index != 0)
+        html += `<tr><td>${index + 1}</td><td>${day}</td><td>${dayOfWeek}</td></tr>`;
     });
   } else {
     html += '<tr><td colspan="3">هیچ روز غیبت کاملی ثبت نشده است.</td></tr>';
