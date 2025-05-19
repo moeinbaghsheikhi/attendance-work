@@ -13,15 +13,15 @@ const upload = multer({ dest: 'uploads/' });
 // آرایه نگاشت شماره کارمند به نام
 const employeeNames = {
   8: 'عامری',
-  10: 'خانفلی',
+  // 10: 'خانفلی',
   12: 'کرمی',
   13: 'لرستانی',
   15: 'کوکبی',
   16: 'شیخی',
-  17: 'خسروی',
-  18: 'قنبری',
+  // 17: 'خسروی',
+  // 18: 'قنبری',
   19: 'آراسته',
-  20: 'مسرور',
+  // 20: 'مسرور',
   21: 'احمدی',
   22: 'رمضانی',
   23: 'معروفی'
@@ -124,6 +124,80 @@ function formatDuration(minutes) {
   return `${hours} ساعت و ${mins} دقیقه`;
 }
 
+// تابع برای محاسبه کارکرد، غیبت و اضافه‌کاری برای یک روز
+function calculateDailyMetrics(date, times, shift) {
+  const dayOfWeek = getPersianDayOfWeek(date);
+  let shiftStart, shiftEnd;
+  if (shift === 'sat-wed') {
+    shiftStart = '10:00:00';
+    shiftEnd = '19:00:00';
+  } else {
+    if (dayOfWeek === 'پنج‌شنبه') {
+      shiftStart = '10:00:00';
+      shiftEnd = '14:00:00';
+    } else {
+      shiftStart = '10:00:00';
+      shiftEnd = '18:00:00';
+    }
+  }
+
+  const shiftStartTime = new Date(`${date} ${shiftStart}`);
+  const shiftEndTime = new Date(`${date} ${shiftEnd}`);
+
+  // محاسبه کارکرد کل (مجموع زمان حضور)
+  let totalWorkMinutes = 0;
+  for (let i = 0; i < times.length; i += 2) {
+    const entryTime = new Date(`${date} ${times[i]}`);
+    const exitTime = new Date(`${date} ${times[i + 1]}`);
+    const diffMs = exitTime - entryTime;
+    totalWorkMinutes += Math.floor(diffMs / 60000);
+  }
+
+  // محاسبه غیبت کل (بازه‌های زمانی که کارمند حضور نداشته)
+  let totalAbsenceMinutes = 0;
+  if (times.length > 0) {
+    let lastExit = shiftStartTime;
+    for (let i = 0; i < times.length; i += 2) {
+      const entryTime = new Date(`${date} ${times[i]}`);
+      // بررسی فاصله بین خروج قبلی و ورود فعلی (فقط اگر داخل شیفت باشد)
+      if (entryTime > lastExit && entryTime < shiftEndTime) {
+        if (lastExit < shiftStartTime) {
+          lastExit = shiftStartTime;
+        }
+        const absenceMs = entryTime - lastExit;
+        totalAbsenceMinutes += Math.floor(absenceMs / 60000);
+      }
+      lastExit = new Date(`${date} ${times[i + 1]}`);
+    }
+    // بررسی غیبت بعد از آخرین خروج تا پایان شیفت
+    if (lastExit < shiftEndTime) {
+      const absenceMs = shiftEndTime - lastExit;
+      totalAbsenceMinutes += Math.floor(absenceMs / 60000);
+    }
+  } else {
+    // اگر هیچ حضوری در روز ثبت نشده، کل زمان شیفت غیبت حساب می‌شه
+    const shiftDurationMs = shiftEndTime - shiftStartTime;
+    totalAbsenceMinutes = Math.floor(shiftDurationMs / 60000);
+  }
+
+  // محاسبه اضافه‌کاری کل
+  let totalOvertimeMinutes = 0;
+  for (let i = 0; i < times.length; i += 2) {
+    const entryTime = new Date(`${date} ${times[i]}`);
+    const exitTime = new Date(`${date} ${times[i + 1]}`);
+    if (entryTime < shiftStartTime) {
+      const overtimeMs = shiftStartTime - entryTime;
+      totalOvertimeMinutes += Math.floor(overtimeMs / 60000);
+    }
+    if (exitTime > shiftEndTime) {
+      const overtimeMs = exitTime - shiftEndTime;
+      totalOvertimeMinutes += Math.floor(overtimeMs / 60000);
+    }
+  }
+
+  return { totalWorkMinutes, totalAbsenceMinutes, totalOvertimeMinutes };
+}
+
 // مسیر برای نمایش جدول کارمند خاص با شیفت
 app.get('/employee/:id/:shift', (req, res) => {
   const employeeId = req.params.id;
@@ -138,78 +212,40 @@ app.get('/employee/:id/:shift', (req, res) => {
   `;
 
   let rowNumber = 1;
-  let totalMinutes = 0;
+  let totalWorkMinutes = 0;
   let totalAbsenceMinutes = 0;
   let totalOvertimeMinutes = 0;
 
   if (globalAttendanceData[employeeId]) {
-    for (const date in globalAttendanceData[employeeId]) {
+    // مرتب‌سازی تاریخ‌ها
+    const dates = Object.keys(globalAttendanceData[employeeId]).sort();
+    for (const date of dates) {
       const times = globalAttendanceData[employeeId][date];
       const recordCount = times.length;
 
       // فقط جفت‌های کامل (تعداد زوج) پردازش می‌شن
-      if (recordCount % 2 === 0) {
+      if (recordCount % 2 === 0 && recordCount > 0) {
+        // محاسبه مقادیر کل برای روز
+        const { totalWorkMinutes: dailyWork, totalAbsenceMinutes: dailyAbsence, totalOvertimeMinutes: dailyOvertime } = calculateDailyMetrics(date, times, shift);
+
+        totalWorkMinutes += dailyWork;
+        totalAbsenceMinutes += dailyAbsence;
+        totalOvertimeMinutes += dailyOvertime;
+
+        // نمایش همه جفت‌ها برای این روز
         for (let i = 0; i < recordCount; i += 2) {
           const entryTimeStr = times[i];
           const exitTimeStr = times[i + 1];
 
-          const entryTime = new Date(`${date} ${entryTimeStr}`);
-          const exitTime = new Date(`${date} ${exitTimeStr}`);
-          const dayOfWeek = getPersianDayOfWeek(date);
-
-          // تعیین زمان شیفت
-          let shiftStart, shiftEnd;
-          if (shift === 'sat-wed') {
-            shiftStart = '10:00:00';
-            shiftEnd = '19:00:00';
-          } else {
-            if (dayOfWeek === 'پنج‌شنبه') {
-              shiftStart = '10:00:00';
-              shiftEnd = '14:00:00';
-            } else {
-              shiftStart = '10:00:00';
-              shiftEnd = '18:00:00';
-            }
-          }
-
-          const shiftStartTime = new Date(`${date} ${shiftStart}`);
-          const shiftEndTime = new Date(`${date} ${shiftEnd}`);
-
-          // محاسبه کارکرد
-          const diffMs = exitTime - entryTime;
-          const durationMinutes = Math.floor(diffMs / 60000);
-          totalMinutes += durationMinutes;
-
-          // محاسبه غیبت
-          let absenceMinutes = 0;
-          if (entryTime > shiftStartTime) {
-            absenceMinutes += Math.floor((entryTime - shiftStartTime) / 60000);
-          }
-          if (exitTime < shiftEndTime) {
-            absenceMinutes += Math.floor((shiftEndTime - exitTime) / 60000);
-          }
-          totalAbsenceMinutes += absenceMinutes;
-
-          // محاسبه اضافه‌کاری
-          let overtimeMinutes = 0;
-          if (entryTime < shiftStartTime) {
-            overtimeMinutes += Math.floor((shiftStartTime - entryTime) / 60000);
-          }
-          if (exitTime > shiftEndTime) {
-            overtimeMinutes += Math.floor((exitTime - shiftEndTime) / 60000);
-          }
-          totalOvertimeMinutes += overtimeMinutes;
-
-          // اضافه کردن ردیف به جدول
           html += `
             <tr>
               <td>${rowNumber}</td>
               <td>${date}</td>
               <td>${entryTimeStr}</td>
               <td>${exitTimeStr}</td>
-              <td>${formatDuration(durationMinutes)}</td>
-              <td>${formatDuration(absenceMinutes)}</td>
-              <td>${formatDuration(overtimeMinutes)}</td>
+              <td>${formatDuration(dailyWork)}</td>
+              <td>${formatDuration(dailyAbsence)}</td>
+              <td>${formatDuration(dailyOvertime)}</td>
             </tr>
           `;
           rowNumber++;
@@ -231,7 +267,7 @@ app.get('/employee/:id/:shift', (req, res) => {
     if (shift === 'sat-thu' && dayOfWeek === 'جمعه') {
       return false;
     }
-    return !globalAttendanceData[employeeId] || !globalAttendanceData[employeeId][day];
+    return !globalAttendanceData[employeeId] || !globalAttendanceData[employeeId][day] || globalAttendanceData[employeeId][day].length % 2 !== 0;
   });
 
   html += `
@@ -251,8 +287,8 @@ app.get('/employee/:id/:shift', (req, res) => {
   }
   html += '</table>';
 
-  const workHours = Math.floor(totalMinutes / 60);
-  const workMinutes = totalMinutes % 60;
+  const workHours = Math.floor(totalWorkMinutes / 60);
+  const workMinutes = totalWorkMinutes % 60;
   const absenceHours = Math.floor(totalAbsenceMinutes / 60);
   const absenceMinutes = totalAbsenceMinutes % 60;
   const overtimeHours = Math.floor(totalOvertimeMinutes / 60);
@@ -268,25 +304,6 @@ app.get('/employee/:id/:shift', (req, res) => {
   html += '</div>';
 
   res.send(html);
-});
-
-// مسیر برای حذف رکورد نامعتبر
-app.delete('/employee/:id/:shift/delete/:date/:time', (req, res) => {
-  const employeeId = req.params.id;
-  const date = req.params.date;
-  const time = req.params.time;
-
-  if (globalAttendanceData[employeeId] && globalAttendanceData[employeeId][date]) {
-    const index = globalAttendanceData[employeeId][date].indexOf(time);
-    if (index !== -1) {
-      globalAttendanceData[employeeId][date].splice(index, 1);
-      if (globalAttendanceData[employeeId][date].length === 0) {
-        delete globalAttendanceData[employeeId][date];
-      }
-      return res.json({ success: true });
-    }
-  }
-  res.json({ success: false, message: 'رکورد مورد نظر یافت نشد.' });
 });
 
 // مسیر برای افزودن رکورد حضور جدید
