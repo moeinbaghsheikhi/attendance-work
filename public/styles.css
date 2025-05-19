@@ -66,5 +66,9 @@ tr:hover {
     background-color: #fff;
 }
 .non-weekend-absence {
-    background-color: rgba(255, 0, 0, 0.2) !important; /* قرمز کمرنگ برای غیبت‌های غیرپنج‌شنبه و غیرجمعه */
+    background-color: rgba(255, 0, 0, 0.2);
+}
+.modal-content {
+    direction: rtl;
+    text-align: right;
 }

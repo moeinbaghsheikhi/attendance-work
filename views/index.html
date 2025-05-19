@@ -98,12 +98,62 @@
 
         <!-- محل نمایش جدول -->
         <div id="result" class="container mt-4"></div>
+
+        <!-- پاپاپ برای افزودن حضور جدید -->
+        <div class="modal fade" id="addAttendanceModal" tabindex="-1" aria-labelledby="addAttendanceModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="addAttendanceModalLabel">افزودن حضور جدید</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="addAttendanceForm">
+                            <div class="mb-3">
+                                <label for="attendanceDate" class="form-label">روز:</label>
+                                <select id="attendanceDate" class="form-select" required></select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="entryTime" class="form-label">ساعت ورود:</label>
+                                <input type="time" id="entryTime" class="form-control" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="exitTime" class="form-label">ساعت خروج:</label>
+                                <input type="time" id="exitTime" class="form-control" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">افزودن</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // گرفتن روزهای ماه برای پاپاپ
+        function populateDaysInMonth(year, month) {
+            const daysSelect = document.getElementById('attendanceDate');
+            daysSelect.innerHTML = '<option value="" disabled selected>یک روز انتخاب کنید</option>';
+            const days = [];
+            const firstDay = new Date(year, month - 1, 1);
+            const lastDay = new Date(year, month, 0);
+            for (let day = firstDay; day <= lastDay; day.setDate(day.getDate() + 1)) {
+                days.push(new Date(day).toISOString().split('T')[0]);
+            }
+            days.forEach(day => {
+                const option = document.createElement('option');
+                option.value = day;
+                option.textContent = day;
+                daysSelect.appendChild(option);
+            });
+        }
+
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
+            const year = formData.get('year');
+            const month = formData.get('month');
             const response = await fetch('/upload', {
                 method: 'POST',
                 body: formData
@@ -112,6 +162,7 @@
             if (result.success) {
                 document.getElementById('employeeSelectContainer').style.display = 'block';
                 document.getElementById('upload-content-bar').style.display = 'none';
+                populateDaysInMonth(year, month);
                 alert('فایل با موفقیت آپلود شد. حالا یک کارمند و شیفت انتخاب کنید.');
             } else {
                 alert('خطا در آپلود فایل: ' + result.message + '. لطفاً مطمئن شوید فایل CSV معتبر است و شامل داده‌های حضور و غیاب با فرمت صحیح (شناسه کارمند, زمان) باشد.');
@@ -122,20 +173,55 @@
             const employeeId = e.target.value;
             const shift = document.getElementById('shift').value;
             if (!employeeId || !shift) return;
-
-            const response = await fetch(`/employee/${employeeId}/${shift}`);
-            const html = await response.text();
-            document.getElementById('result').innerHTML = html;
+            await refreshTable(employeeId, shift);
         });
 
         document.getElementById('shift').addEventListener('change', async (e) => {
             const shift = e.target.value;
             const employeeId = document.getElementById('employeeId').value;
             if (!employeeId || !shift) return;
+            await refreshTable(employeeId, shift);
+        });
 
+        // تابع برای به‌روزرسانی جدول
+        async function refreshTable(employeeId, shift) {
             const response = await fetch(`/employee/${employeeId}/${shift}`);
             const html = await response.text();
             document.getElementById('result').innerHTML = html;
+
+            // اضافه کردن event listener برای دکمه افزودن حضور
+            const addButton = document.getElementById('addAttendanceButton');
+            if (addButton) {
+                addButton.addEventListener('click', () => {
+                    const modal = new bootstrap.Modal(document.getElementById('addAttendanceModal'));
+                    modal.show();
+                });
+            }
+        }
+
+        // مدیریت فرم افزودن حضور
+        document.getElementById('addAttendanceForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const employeeId = document.getElementById('employeeId').value;
+            const shift = document.getElementById('shift').value;
+            const date = document.getElementById('attendanceDate').value;
+            const entryTime = document.getElementById('entryTime').value;
+            const exitTime = document.getElementById('exitTime').value;
+
+            const response = await fetch(`/employee/${employeeId}/${shift}/add`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date, entryTime, exitTime })
+            });
+            const result = await response.json();
+            if (result.success) {
+                alert('رکورد حضور با موفقیت اضافه شد.');
+                const modal = bootstrap.Modal.getInstance(document.getElementById('addAttendanceModal'));
+                modal.hide();
+                await refreshTable(employeeId, shift);
+            } else {
+                alert('خطا در افزودن رکورد: ' + result.message);
+            }
         });
     </script>
 </body>

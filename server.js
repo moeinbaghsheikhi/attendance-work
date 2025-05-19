@@ -33,6 +33,7 @@ let globalYear = '';
 let globalMonth = '';
 
 // تنظیمات برای ارائه فایل‌های استاتیک
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ارائه صفحه اصلی
@@ -52,40 +53,46 @@ app.post('/upload', upload.single('csv_file'), (req, res) => {
 
   globalAttendanceData = {};
   fs.createReadStream(req.file.path)
-    .pipe(parse({ delimiter: ',' }))
+    .pipe(parse({
+      delimiter: ',',
+      columns: false,
+      skip_empty_lines: true,
+      skip_lines_with_error: true,
+      relax_column_count: true
+    }))
     .on('data', (row) => {
-      const employeeId = row[0];
-      const timestamp = row[1];
-      const date = new Date(timestamp);
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
+      if (row.length >= 2 && row[0] && row[1]) {
+        const employeeId = row[0];
+        const timestamp = row[1];
+        const date = new Date(timestamp);
+        if (!isNaN(date.getTime())) {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
 
-      if (year == globalYear && month == globalMonth) {
-        const time = date.toTimeString().split(' ')[0];
-        if (!globalAttendanceData[employeeId]) {
-          globalAttendanceData[employeeId] = {};
+          if (year == globalYear && month == globalMonth) {
+            const time = date.toTimeString().split(' ')[0];
+            if (!globalAttendanceData[employeeId]) {
+              globalAttendanceData[employeeId] = {};
+            }
+            if (!globalAttendanceData[employeeId][date.toISOString().split('T')[0]]) {
+              globalAttendanceData[employeeId][date.toISOString().split('T')[0]] = [];
+            }
+            globalAttendanceData[employeeId][date.toISOString().split('T')[0]].push(time);
+          }
         }
-        if (!globalAttendanceData[employeeId][date.toISOString().split('T')[0]]) {
-          globalAttendanceData[employeeId][date.toISOString().split('T')[0]] = [];
-        }
-        globalAttendanceData[employeeId][date.toISOString().split('T')[0]].push(time);
       }
     })
     .on('end', () => {
-      // مرتب‌سازی زمان‌ها
       for (const employeeId in globalAttendanceData) {
         for (const date in globalAttendanceData[employeeId]) {
           globalAttendanceData[employeeId][date].sort();
         }
       }
-
-      // حذف فایل موقت
       fs.unlinkSync(req.file.path);
       res.json({ success: true });
     })
     .on('error', (err) => {
-      console.log("error:")
-      console.log(err)
+      console.log("error:", err);
       res.json({ success: false, message: 'خطا در پردازش فایل: ' + err.message });
     });
 });
@@ -93,77 +100,74 @@ app.post('/upload', upload.single('csv_file'), (req, res) => {
 // تابع برای گرفتن تمام روزهای ماه
 function getDaysInMonth(year, month) {
   const days = [];
-  const firstDay = new Date(year, month - 1, 1); // اولین روز ماه
-  const lastDay = new Date(year, month, 0); // آخرین روز ماه
+  const firstDay = new Date(year, month - 1, 1);
+  const lastDay = new Date(year, month, 0);
   for (let day = firstDay; day <= lastDay; day.setDate(day.getDate() + 1)) {
     days.push(new Date(day).toISOString().split('T')[0]);
   }
   return days;
 }
 
-// تابع برای گرفتن نام روز هفته به فارسی (هماهنگ با تقویم ایرانی)
+// تابع برای گرفتن نام روز هفته به فارسی
 function getPersianDayOfWeek(dateString) {
   const date = new Date(dateString);
   const dayIndex = date.getDay();
-  // تبدیل روز هفته میلادی به ایرانی: شنبه=0, یک‌شنبه=1, ..., جمعه=6
-  const persianDayIndex = (dayIndex + 6) % 7; // جابجایی: یک‌شنبه (0) به یک‌شنبه (1)، شنبه (6) به شنبه (0)
+  const persianDayIndex = (dayIndex + 6) % 7;
   const days = ['شنبه', 'یک‌شنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
   return days[persianDayIndex];
+}
+
+// تابع برای فرمت کردن زمان به ساعت و دقیقه
+function formatDuration(minutes) {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours} ساعت و ${mins} دقیقه`;
 }
 
 // مسیر برای نمایش جدول کارمند خاص با شیفت
 app.get('/employee/:id/:shift', (req, res) => {
   const employeeId = req.params.id;
-  const shift = req.params.shift; // sat-wed یا sat-thu
+  const shift = req.params.shift;
 
   let html = `
     <div class="container">
       <h2>جدول حضور و غیاب کارمند ${employeeNames[employeeId] || employeeId} (شیفت: ${shift === 'sat-wed' ? 'شنبه تا چهارشنبه' : 'شنبه تا پنج‌شنبه'})</h2>
+      <button id="addAttendanceButton" class="btn btn-success mb-3">افزودن حضور جدید</button>
       <table>
-        <tr><th>ردیف</th><th>تاریخ</th><th>زمان</th><th>نوع رکورد</th></tr>
+        <tr><th>ردیف</th><th>تاریخ</th><th>ساعت ورود</th><th>ساعت خروج</th><th>مجموع کارکرد</th><th>مجموع غیبت</th><th>مجموع اضافه‌کاری</th></tr>
   `;
 
   let rowNumber = 1;
-  let totalMinutes = 0; // مجموع ساعات کار
-  let totalAbsenceMinutes = 0; // مجموع غیبت
-  let totalOvertimeMinutes = 0; // مجموع اضافه‌کاری
+  let totalMinutes = 0;
+  let totalAbsenceMinutes = 0;
+  let totalOvertimeMinutes = 0;
 
   if (globalAttendanceData[employeeId]) {
     for (const date in globalAttendanceData[employeeId]) {
       const times = globalAttendanceData[employeeId][date];
       const recordCount = times.length;
-      const isInvalid = recordCount % 2 !== 0;
 
-      for (let i = 0; i < recordCount; i++) {
-        const time = times[i];
-        let type = i % 2 === 0 ? 'ورود' : 'خروج';
-        let className = i % 2 === 0 ? 'entry' : 'exit';
+      // فقط جفت‌های کامل (تعداد زوج) پردازش می‌شن
+      if (recordCount % 2 === 0) {
+        for (let i = 0; i < recordCount; i += 2) {
+          const entryTimeStr = times[i];
+          const exitTimeStr = times[i + 1];
 
-        if (isInvalid && i === recordCount - 1) {
-          className += ' invalid';
-          type = 'نامعتبر';
-        }
-
-        html += `<tr><td>${rowNumber}</td><td>${date}</td><td>${time}</td><td class="${className}">${type}</td></tr>`;
-        rowNumber++;
-
-        // محاسبه ساعات کار، غیبت و اضافه‌کاری فقط برای جفت‌های کامل
-        if (i % 2 === 1 && !isInvalid) {
-          const entryTime = new Date(`${date} ${times[i - 1]}`);
-          const exitTime = new Date(`${date} ${time}`);
+          const entryTime = new Date(`${date} ${entryTimeStr}`);
+          const exitTime = new Date(`${date} ${exitTimeStr}`);
           const dayOfWeek = getPersianDayOfWeek(date);
 
-          // تعیین زمان شیفت بر اساس نوع شیفت و روز هفته
+          // تعیین زمان شیفت
           let shiftStart, shiftEnd;
           if (shift === 'sat-wed') {
-            shiftStart = '10:00:00'; // شنبه تا چهارشنبه: 10:00 تا 19:00
+            shiftStart = '10:00:00';
             shiftEnd = '19:00:00';
-          } else { // sat-thu
+          } else {
             if (dayOfWeek === 'پنج‌شنبه') {
-              shiftStart = '10:00:00'; // پنج‌شنبه: 10:00 تا 14:00
+              shiftStart = '10:00:00';
               shiftEnd = '14:00:00';
             } else {
-              shiftStart = '10:00:00'; // شنبه تا چهارشنبه: 10:00 تا 18:00
+              shiftStart = '10:00:00';
               shiftEnd = '18:00:00';
             }
           }
@@ -171,7 +175,7 @@ app.get('/employee/:id/:shift', (req, res) => {
           const shiftStartTime = new Date(`${date} ${shiftStart}`);
           const shiftEndTime = new Date(`${date} ${shiftEnd}`);
 
-          // محاسبه ساعات کار
+          // محاسبه کارکرد
           const diffMs = exitTime - entryTime;
           const durationMinutes = Math.floor(diffMs / 60000);
           totalMinutes += durationMinutes;
@@ -195,30 +199,41 @@ app.get('/employee/:id/:shift', (req, res) => {
             overtimeMinutes += Math.floor((exitTime - shiftEndTime) / 60000);
           }
           totalOvertimeMinutes += overtimeMinutes;
+
+          // اضافه کردن ردیف به جدول
+          html += `
+            <tr>
+              <td>${rowNumber}</td>
+              <td>${date}</td>
+              <td>${entryTimeStr}</td>
+              <td>${exitTimeStr}</td>
+              <td>${formatDuration(durationMinutes)}</td>
+              <td>${formatDuration(absenceMinutes)}</td>
+              <td>${formatDuration(overtimeMinutes)}</td>
+            </tr>
+          `;
+          rowNumber++;
         }
       }
     }
   } else {
-    html += '<tr><td colspan="4">هیچ رکوردی برای این کارمند یافت نشد.</td></tr>';
+    html += '<tr><td colspan="7">هیچ رکوردی برای این کارمند یافت نشد.</td></tr>';
   }
 
   html += '</table>';
 
-  // محاسبه روزهای غایب
   const daysInMonth = getDaysInMonth(globalYear, parseInt(globalMonth));
   const absentDays = daysInMonth.filter((day) => {
     const dayOfWeek = getPersianDayOfWeek(day);
-    // فقط روزهایی که جزو شیفت هستند بررسی می‌شن
     if (shift === 'sat-wed' && (dayOfWeek === 'پنج‌شنبه' || dayOfWeek === 'جمعه')) {
-      return false; // پنج‌شنبه و جمعه برای شیفت sat-wed غیبت نیست
+      return false;
     }
     if (shift === 'sat-thu' && dayOfWeek === 'جمعه') {
-      return false; // فقط جمعه برای شیفت sat-thu غیبت نیست
+      return false;
     }
     return !globalAttendanceData[employeeId] || !globalAttendanceData[employeeId][day];
   });
 
-  // جدول روزهای غایب
   html += `
     <h2 class="mt-5">روزهای غیبت کامل کارمند ${employeeNames[employeeId] || employeeId}</h2>
     <table class="absence-table">
@@ -228,16 +243,14 @@ app.get('/employee/:id/:shift', (req, res) => {
     absentDays.forEach((day, index) => {
       const dayOfWeek = getPersianDayOfWeek(day);
       const isNonWeekend = dayOfWeek !== 'پنج‌شنبه' && dayOfWeek !== 'جمعه';
-      // const rowClass = isNonWeekend ? 'non-weekend-absence' : '';
-      if(index != 0)
-        html += `<tr><td>${index + 1}</td><td>${day}</td><td>${dayOfWeek}</td></tr>`;
+      const rowClass = isNonWeekend ? 'non-weekend-absence' : '';
+      html += `<tr class="${rowClass}"><td>${index + 1}</td><td>${day}</td><td>${dayOfWeek}</td></tr>`;
     });
   } else {
     html += '<tr><td colspan="3">هیچ روز غیبت کاملی ثبت نشده است.</td></tr>';
   }
   html += '</table>';
 
-  // نمایش مجموع‌ها
   const workHours = Math.floor(totalMinutes / 60);
   const workMinutes = totalMinutes % 60;
   const absenceHours = Math.floor(totalAbsenceMinutes / 60);
@@ -255,6 +268,58 @@ app.get('/employee/:id/:shift', (req, res) => {
   html += '</div>';
 
   res.send(html);
+});
+
+// مسیر برای حذف رکورد نامعتبر
+app.delete('/employee/:id/:shift/delete/:date/:time', (req, res) => {
+  const employeeId = req.params.id;
+  const date = req.params.date;
+  const time = req.params.time;
+
+  if (globalAttendanceData[employeeId] && globalAttendanceData[employeeId][date]) {
+    const index = globalAttendanceData[employeeId][date].indexOf(time);
+    if (index !== -1) {
+      globalAttendanceData[employeeId][date].splice(index, 1);
+      if (globalAttendanceData[employeeId][date].length === 0) {
+        delete globalAttendanceData[employeeId][date];
+      }
+      return res.json({ success: true });
+    }
+  }
+  res.json({ success: false, message: 'رکورد مورد نظر یافت نشد.' });
+});
+
+// مسیر برای افزودن رکورد حضور جدید
+app.post('/employee/:id/:shift/add', (req, res) => {
+  const employeeId = req.params.id;
+  const { date, entryTime, exitTime } = req.body;
+
+  const entryDateTime = new Date(`${date} ${entryTime}`);
+  const exitDateTime = new Date(`${date} ${exitTime}`);
+  if (isNaN(entryDateTime.getTime()) || isNaN(exitDateTime.getTime())) {
+    return res.json({ success: false, message: 'زمان ورود یا خروج نامعتبر است.' });
+  }
+  if (entryDateTime >= exitDateTime) {
+    return res.json({ success: false, message: 'ساعت خروج باید بعد از ساعت ورود باشد.' });
+  }
+
+  const year = entryDateTime.getFullYear();
+  const month = String(entryDateTime.getMonth() + 1).padStart(2, '0');
+  if (year != globalYear || month != globalMonth) {
+    return res.json({ success: false, message: 'تاریخ انتخاب‌شده خارج از ماه و سال انتخاب‌شده است.' });
+  }
+
+  if (!globalAttendanceData[employeeId]) {
+    globalAttendanceData[employeeId] = {};
+  }
+  if (!globalAttendanceData[employeeId][date]) {
+    globalAttendanceData[employeeId][date] = [];
+  }
+
+  globalAttendanceData[employeeId][date].push(entryTime + ':00', exitTime + ':00');
+  globalAttendanceData[employeeId][date].sort();
+
+  res.json({ success: true });
 });
 
 app.listen(port, () => {
