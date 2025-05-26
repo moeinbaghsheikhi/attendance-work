@@ -168,8 +168,8 @@ function calculateDailyMetrics(date, times, shift) {
     let effectiveStartTime = shiftStartTime;
     let effectiveEndTime = shiftEndTime;
 
-    // اگر ورود در بازه شناوری (تا یک ساعت بعد از شروع شیفت) باشد
-    if (firstEntry <= floatingWindowStart) {
+    // اگر ورود در بازه شناوری (تا یک ساعت بعد از شروع شیفت) باشد و بعد از شروع شیفت باشد
+    if (firstEntry > shiftStartTime && firstEntry <= floatingWindowStart) {
       const lateMinutes = Math.floor((firstEntry - shiftStartTime) / 60000); // میزان تأخیر
       const allowedLateMinutes = Math.min(60, lateMinutes); // حداکثر 1 ساعت شناوری
       const requiredExitTime = new Date(shiftEndTime.getTime() + allowedLateMinutes * 60 * 1000);
@@ -225,7 +225,7 @@ function calculateDailyMetrics(date, times, shift) {
     }
   }
 
-  return { totalWorkMinutes, totalAbsenceMinutes, totalOvertimeMinutes };
+  return { totalWorkMinutes, totalAbsenceMinutes, totalOvertimeMinutes, usedFloatingMinutes };
 }
 
 // مسیر برای نمایش جدول کارمند خاص با شیفت
@@ -238,13 +238,14 @@ app.get('/employee/:id/:shift', (req, res) => {
       <h2>جدول حضور و غیاب کارمند ${employeeNames[employeeId] || employeeId} (شیفت: ${shift === 'sat-wed' ? 'شنبه تا چهارشنبه' : 'شنبه تا پنج‌شنبه'})</h2>
       <button id="addAttendanceButton" class="btn btn-success mb-3">افزودن حضور جدید</button>
       <table>
-        <tr><th>ردیف</th><th>تاریخ</th><th>ساعت ورود</th><th>ساعت خروج</th><th>مجموع کارکرد</th><th>مجموع غیبت</th><th>مجموع اضافه‌کاری</th></tr>
+        <tr><th>ردیف</th><th>تاریخ</th><th>ساعت ورود</th><th>ساعت خروج</th><th>مجموع کارکرد</th><th>مجموع غیبت</th><th>مجموع اضافه‌کاری</th><th>مجموع شناوری</th></tr>
   `;
 
   let rowNumber = 1;
   let totalWorkMinutes = 0;
   let totalAbsenceMinutes = 0;
   let totalOvertimeMinutes = 0;
+  let totalFloatingMinutes = 0;
 
   if (globalAttendanceData[employeeId]) {
     const dates = Object.keys(globalAttendanceData[employeeId]).sort();
@@ -253,11 +254,12 @@ app.get('/employee/:id/:shift', (req, res) => {
       const recordCount = times.length;
 
       if (recordCount % 2 === 0 && recordCount > 0) {
-        const { totalWorkMinutes: dailyWork, totalAbsenceMinutes: dailyAbsence, totalOvertimeMinutes: dailyOvertime } = calculateDailyMetrics(date, times, shift);
+        const { totalWorkMinutes: dailyWork, totalAbsenceMinutes: dailyAbsence, totalOvertimeMinutes: dailyOvertime, usedFloatingMinutes: dailyFloating } = calculateDailyMetrics(date, times, shift);
 
         totalWorkMinutes += dailyWork;
         totalAbsenceMinutes += dailyAbsence;
         totalOvertimeMinutes += dailyOvertime;
+        totalFloatingMinutes += dailyFloating;
 
         for (let i = 0; i < recordCount; i += 2) {
           const entryTimeStr = times[i];
@@ -272,6 +274,7 @@ app.get('/employee/:id/:shift', (req, res) => {
               <td>${formatDuration(dailyWork)}</td>
               <td>${formatDuration(dailyAbsence)}</td>
               <td>${formatDuration(dailyOvertime)}</td>
+              <td>${formatDuration(dailyFloating)}</td>
             </tr>
           `;
           rowNumber++;
@@ -279,7 +282,7 @@ app.get('/employee/:id/:shift', (req, res) => {
       }
     }
   } else {
-    html += '<tr><td colspan="7">هیچ رکوردی برای این کارمند یافت نشد.</td></tr>';
+    html += '<tr><td colspan="8">هیچ رکوردی برای این کارمند یافت نشد.</td></tr>';
   }
 
   html += '</table>';
@@ -293,7 +296,16 @@ app.get('/employee/:id/:shift', (req, res) => {
     if (shift === 'sat-thu' && dayOfWeek === 'جمعه') {
       return false;
     }
-    return !globalAttendanceData[employeeId] || !globalAttendanceData[employeeId][day] || globalAttendanceData[employeeId][day].length % 2 !== 0;
+    // فقط روزهایی که هیچ رکوردی ندارن یا رکورد کامل (زوج) ندارن و ناقص هم نیستن (فیلتر ناقص‌ها)
+    const hasRecords = globalAttendanceData[employeeId] && globalAttendanceData[employeeId][day];
+    if (hasRecords) {
+      const times = globalAttendanceData[employeeId][day];
+      if (times.length % 2 !== 0 && times.length > 0) {
+        return false; // روزهایی با رکورد ناقص (فرد) حذف می‌شن
+      }
+      return times.length === 0; // فقط روزهایی که هیچ رکوردی ندارن به‌عنوان غیبت کامل می‌مونن
+    }
+    return true; // روزهایی که هیچ داده‌ای ندارن به‌عنوان غیبت کامل حساب می‌شن
   });
 
   html += `
@@ -303,13 +315,41 @@ app.get('/employee/:id/:shift', (req, res) => {
   `;
   if (absentDays.length > 0) {
     absentDays.forEach((day, index) => {
-      const dayOfWeek = getPersianDayOfWeek(day);
-      const isNonWeekend = dayOfWeek !== 'پنج‌شنبه' && dayOfWeek !== 'جمعه';
-      const rowClass = isNonWeekend ? 'non-weekend-absence' : '';
-      html += `<tr class="${rowClass}"><td>${index + 1}</td><td>${day}</td><td>${dayOfWeek}</td></tr>`;
+      if(index !== 0){
+        const dayOfWeek = getPersianDayOfWeek(day);
+        const isNonWeekend = dayOfWeek !== 'پنج‌شنبه' && dayOfWeek !== 'جمعه';
+        const rowClass = isNonWeekend ? 'non-weekend-absence' : '';
+        html += `<tr class="${rowClass}"><td>${index + 1}</td><td>${day}</td><td>${dayOfWeek}</td></tr>`;
+      }
     });
   } else {
     html += '<tr><td colspan="3">هیچ روز غیبت کاملی ثبت نشده است.</td></tr>';
+  }
+  html += '</table>';
+
+  // جدول جدید برای رکوردهای ناقص
+  html += `
+    <h2 class="mt-5">رکوردهای ناقص کارمند ${employeeNames[employeeId] || employeeId}</h2>
+    <table class="absence-table">
+      <tr><th>ردیف</th><th>تاریخ</th><th>روز هفته</th><th>تایم‌های ثبت‌شده</th></tr>
+  `;
+  if (globalAttendanceData[employeeId]) {
+    const datesWithOddRecords = Object.keys(globalAttendanceData[employeeId]).filter(date => {
+      const times = globalAttendanceData[employeeId][date];
+      return times.length % 2 !== 0 && times.length > 0;
+    });
+    if (datesWithOddRecords.length > 0) {
+      datesWithOddRecords.forEach((date, index) => {
+        const times = globalAttendanceData[employeeId][date];
+        const dayOfWeek = getPersianDayOfWeek(date);
+        const timesString = times.join(' - ');
+        html += `<tr><td>${index + 1}</td><td>${date}</td><td>${dayOfWeek}</td><td>${timesString}</td></tr>`;
+      });
+    } else {
+      html += '<tr><td colspan="4">هیچ رکورد ناقصی ثبت نشده است.</td></tr>';
+    }
+  } else {
+    html += '<tr><td colspan="4">هیچ رکورد ناقصی ثبت نشده است.</td></tr>';
   }
   html += '</table>';
 
@@ -319,12 +359,15 @@ app.get('/employee/:id/:shift', (req, res) => {
   const absenceMinutes = totalAbsenceMinutes % 60;
   const overtimeHours = Math.floor(totalOvertimeMinutes / 60);
   const overtimeMinutes = totalOvertimeMinutes % 60;
+  const floatingHours = Math.floor(totalFloatingMinutes / 60);
+  const floatingMinutes = totalFloatingMinutes % 60;
 
   html += `
     <div class="monthly-summary">
       مجموع ساعات کار ماهانه برای ${employeeNames[employeeId] || employeeId}: ${workHours} ساعت و ${workMinutes} دقیقه<br>
       مجموع غیبت ماهانه: ${absenceHours} ساعت و ${absenceMinutes} دقیقه<br>
-      مجموع اضافه‌کاری ماهانه: ${overtimeHours} ساعت و ${overtimeMinutes} دقیقه
+      مجموع اضافه‌کاری ماهانه: ${overtimeHours} ساعت و ${overtimeMinutes} دقیقه<br>
+      مجموع شناوری ماهانه: ${floatingHours} ساعت و ${floatingMinutes} دقیقه
     </div>
   `;
   html += '</div>';
