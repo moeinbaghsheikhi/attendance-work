@@ -13,15 +13,15 @@ const upload = multer({ dest: 'uploads/' });
 // آرایه نگاشت شماره کارمند به نام
 const employeeNames = {
   8: 'عامری',
-  // 10: 'خانفلی',
+  10: 'خانفلی',
   12: 'کرمی',
   13: 'لرستانی',
   15: 'کوکبی',
   16: 'شیخی',
-  // 17: 'خسروی',
-  // 18: 'قنبری',
+  17: 'خسروی',
+  18: 'قنبری',
   19: 'آراسته',
-  // 20: 'مسرور',
+  20: 'مسرور',
   21: 'احمدی',
   22: 'رمضانی',
   23: 'معروفی'
@@ -144,6 +144,10 @@ function calculateDailyMetrics(date, times, shift) {
   const shiftStartTime = new Date(`${date} ${shiftStart}`);
   const shiftEndTime = new Date(`${date} ${shiftEnd}`);
 
+  // زمان شناوری: یک ساعت بعد از شروع و پایان شیفت
+  const floatingWindowStart = new Date(shiftStartTime.getTime() + 60 * 60 * 1000); // +1 ساعت
+  const floatingWindowEnd = new Date(shiftEndTime.getTime() + 60 * 60 * 1000); // +1 ساعت
+
   // محاسبه کارکرد کل (مجموع زمان حضور)
   let totalWorkMinutes = 0;
   for (let i = 0; i < times.length; i += 2) {
@@ -153,29 +157,46 @@ function calculateDailyMetrics(date, times, shift) {
     totalWorkMinutes += Math.floor(diffMs / 60000);
   }
 
-  // محاسبه غیبت کل (بازه‌های زمانی که کارمند حضور نداشته)
+  // محاسبه غیبت کل با در نظر گرفتن شناوری
   let totalAbsenceMinutes = 0;
+  let usedFloatingMinutes = 0; // برای ردیابی میزان شناوری استفاده‌شده
   if (times.length > 0) {
-    let lastExit = shiftStartTime;
+    let firstEntry = new Date(`${date} ${times[0]}`);
+    let lastExit = new Date(`${date} ${times[times.length - 1]}`);
+
+    // بررسی قانون شناوری
+    let effectiveStartTime = shiftStartTime;
+    let effectiveEndTime = shiftEndTime;
+
+    // اگر ورود در بازه شناوری (تا یک ساعت بعد از شروع شیفت) باشد
+    if (firstEntry <= floatingWindowStart) {
+      const lateMinutes = Math.floor((firstEntry - shiftStartTime) / 60000); // میزان تأخیر
+      const allowedLateMinutes = Math.min(60, lateMinutes); // حداکثر 1 ساعت شناوری
+      const requiredExitTime = new Date(shiftEndTime.getTime() + allowedLateMinutes * 60 * 1000);
+      if (lastExit >= requiredExitTime) {
+        effectiveStartTime = firstEntry; // تأخیر نادیده گرفته می‌شه
+        effectiveEndTime = new Date(shiftEndTime.getTime() + (firstEntry - shiftStartTime));
+        usedFloatingMinutes = allowedLateMinutes; // میزان شناوری استفاده‌شده
+      }
+    }
+
+    let lastExitForAbsence = effectiveStartTime;
     for (let i = 0; i < times.length; i += 2) {
       const entryTime = new Date(`${date} ${times[i]}`);
-      // بررسی فاصله بین خروج قبلی و ورود فعلی (فقط اگر داخل شیفت باشد)
-      if (entryTime > lastExit && entryTime < shiftEndTime) {
-        if (lastExit < shiftStartTime) {
-          lastExit = shiftStartTime;
+      if (entryTime > lastExitForAbsence && entryTime < effectiveEndTime) {
+        if (lastExitForAbsence < effectiveStartTime) {
+          lastExitForAbsence = effectiveStartTime;
         }
-        const absenceMs = entryTime - lastExit;
+        const absenceMs = entryTime - lastExitForAbsence;
         totalAbsenceMinutes += Math.floor(absenceMs / 60000);
       }
-      lastExit = new Date(`${date} ${times[i + 1]}`);
+      lastExitForAbsence = new Date(`${date} ${times[i + 1]}`);
     }
-    // بررسی غیبت بعد از آخرین خروج تا پایان شیفت
-    if (lastExit < shiftEndTime) {
-      const absenceMs = shiftEndTime - lastExit;
+    if (lastExitForAbsence < effectiveEndTime) {
+      const absenceMs = effectiveEndTime - lastExitForAbsence;
       totalAbsenceMinutes += Math.floor(absenceMs / 60000);
     }
   } else {
-    // اگر هیچ حضوری در روز ثبت نشده، کل زمان شیفت غیبت حساب می‌شه
     const shiftDurationMs = shiftEndTime - shiftStartTime;
     totalAbsenceMinutes = Math.floor(shiftDurationMs / 60000);
   }
@@ -185,13 +206,22 @@ function calculateDailyMetrics(date, times, shift) {
   for (let i = 0; i < times.length; i += 2) {
     const entryTime = new Date(`${date} ${times[i]}`);
     const exitTime = new Date(`${date} ${times[i + 1]}`);
+    // اضافه‌کاری ورود
     if (entryTime < shiftStartTime) {
       const overtimeMs = shiftStartTime - entryTime;
       totalOvertimeMinutes += Math.floor(overtimeMs / 60000);
     }
+    // اضافه‌کاری خروج
     if (exitTime > shiftEndTime) {
       const overtimeMs = exitTime - shiftEndTime;
-      totalOvertimeMinutes += Math.floor(overtimeMs / 60000);
+      let overtimeMinutes = Math.floor(overtimeMs / 60000);
+      // کسر زمان شناوری استفاده‌شده برای جبران تأخیر
+      if (usedFloatingMinutes > 0) {
+        const adjustedOvertime = Math.max(0, overtimeMinutes - usedFloatingMinutes);
+        totalOvertimeMinutes += adjustedOvertime;
+      } else {
+        totalOvertimeMinutes += overtimeMinutes;
+      }
     }
   }
 
@@ -217,22 +247,18 @@ app.get('/employee/:id/:shift', (req, res) => {
   let totalOvertimeMinutes = 0;
 
   if (globalAttendanceData[employeeId]) {
-    // مرتب‌سازی تاریخ‌ها
     const dates = Object.keys(globalAttendanceData[employeeId]).sort();
     for (const date of dates) {
       const times = globalAttendanceData[employeeId][date];
       const recordCount = times.length;
 
-      // فقط جفت‌های کامل (تعداد زوج) پردازش می‌شن
       if (recordCount % 2 === 0 && recordCount > 0) {
-        // محاسبه مقادیر کل برای روز
         const { totalWorkMinutes: dailyWork, totalAbsenceMinutes: dailyAbsence, totalOvertimeMinutes: dailyOvertime } = calculateDailyMetrics(date, times, shift);
 
         totalWorkMinutes += dailyWork;
         totalAbsenceMinutes += dailyAbsence;
         totalOvertimeMinutes += dailyOvertime;
 
-        // نمایش همه جفت‌ها برای این روز
         for (let i = 0; i < recordCount; i += 2) {
           const entryTimeStr = times[i];
           const exitTimeStr = times[i + 1];
